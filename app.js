@@ -1,13 +1,13 @@
+require('dotenv').config();
 var express = require('express');
 var request = require('request');
 var mongodb = require('mongodb').MongoClient;
-var fs = require('fs');
-var mockData = JSON.parse(fs.readFileSync('./test.json', 'utf8'));
+// var fs = require('fs');
+// var mockData = JSON.parse(fs.readFileSync('./test.json', 'utf8'));
 
-var port = process.env.PORT || 5000;
-var url = "mongodb://localhost";
-var imgurID = '585e42d5c27ca99';
-var imgurSecret = '630eb7f3e0fbf3c7ab143ab28c3250dded1d55c4';
+var port = process.env.PORT || 3000;
+var url = process.env.MONGO_DB_URL;
+var imgurID = process.env.IMGUR_CLIENT_ID;
 var imgurAuthHeader = 'Client-ID ' + imgurID;
 var imgurSearchUrl = 'https://api.imgur.com/3/gallery/search/top';
 
@@ -27,34 +27,61 @@ var searchRoute = function (req, res) {
 		}
 	};
 
-	// request(options, function callback(error, response, body) {
-	// 	if (error) res.status(401).send(error);
+	request(options, function callback(error, response, body) {
+		if (error) return res.status(response.status).end(error);
 
-	// 	if (response.status == 200) {
-	// 		var info = JSON.parse(body);
+		if (response.statusCode == 200) {
 
-	// 		res.status(200).send(response.body);
-	// 	}
-	// });
+			var info = JSON.parse(body).data
+				.filter(result => !result.is_album)
+				.map(data => {
+					return {
+						alt: data.title,
+						url: data.link,
+						page: 'http://imgur.com/gallery/' + data.id
+					};
+				});
 
-	res.status(200).send(mockData.data
-		.filter(result => !result.is_album)
-		.map(data => {
-			return {
-				alt: data.title,
-				url: data.link,
-				page: 'http://imgur.com/gallery/'+data.id
-			};
-		}));
+			mongodb.connect(url, (err, db) => {
+				if (err) throw err;
+
+				var searchHistory = db.collection('searchHistory');
+
+				var searchInfo = {
+					"term": keywords,
+					"when": new Date()
+				}
+
+				searchHistory.insert(searchInfo, (err, data) => {
+					if (err) throw err;
+				});
+
+				db.close();
+			});
+
+			res.status(200).end(JSON.stringify(info));
+		}
+	});
 };
 
 var latestRoute = function (req, res) {
-	var keywords = req.params.keywords;
 
-	res.status(200).send("Latest OK");
+	mongodb.connect(url, function (err, db) {
+		if (err) throw err;
+
+		var searchHistory = db.collection('searchHistory');
+
+		// Pull the last 25 successful searches
+		var latestSearches = searchHistory.find({})
+			.sort({ $natural: -1 })
+			.limit(25)
+			.toArray().then(data => res.status(200).end(JSON.stringify(data)));
+
+		db.close();
+	});
 };
 
-app.get('/api/imagesearch/:keywords', searchRoute);
+app.get('/api/search/:keywords', searchRoute);
 app.get('/api/latest/', latestRoute);
 
 app.use(express.static('public'));
